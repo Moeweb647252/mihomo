@@ -138,10 +138,15 @@ func NewWtp(option WtpOption) (*Wtp, error) {
 	}
 
 	quicConfig := &quic.Config{
-		MaxIdleTimeout:    5 * time.Minute,
-		KeepAlivePeriod:   keepAlivePeriod,
-		EnableDatagrams:   true,
-		InitialPacketSize: 1200,
+		MaxIdleTimeout:                 5 * time.Minute,
+		KeepAlivePeriod:                keepAlivePeriod,
+		EnableDatagrams:                true,
+		InitialPacketSize:              1200,
+		InitialStreamReceiveWindow:     4 * 1024 * 1024,  // 16MB 初始流窗口
+		InitialConnectionReceiveWindow: 8 * 1024 * 1024,  // 32MB 初始连接窗口
+		MaxStreamReceiveWindow:         16 * 1024 * 1024, // 16MB 单流窗口
+		MaxConnectionReceiveWindow:     32 * 1024 * 1024, // 32MB 连接窗口
+		MaxIncomingStreams:             1024,
 	}
 
 	outbound := &Wtp{
