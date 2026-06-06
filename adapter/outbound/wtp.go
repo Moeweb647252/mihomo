@@ -134,7 +134,7 @@ func NewWtp(option WtpOption) (*Wtp, error) {
 
 	keepAlivePeriod := time.Duration(option.KeepAlive) * time.Second
 	if option.KeepAlive == 0 {
-		keepAlivePeriod = 10 * time.Second
+		keepAlivePeriod = 60 * time.Second
 	}
 
 	quicConfig := &quic.Config{
@@ -147,6 +147,8 @@ func NewWtp(option WtpOption) (*Wtp, error) {
 		MaxStreamReceiveWindow:         16 * 1024 * 1024, // 16MB 单流窗口
 		MaxConnectionReceiveWindow:     32 * 1024 * 1024, // 32MB 连接窗口
 		MaxIncomingStreams:             1024,
+		HandshakeIdleTimeout:           10 * time.Second,
+		DisablePathMTUDiscovery:        true,
 	}
 
 	outbound := &Wtp{
