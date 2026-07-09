@@ -17,9 +17,8 @@ import (
 
 type Wtp struct {
 	*Base
-	option     *WtpOption
-	quicConfig *quic.Config
-	tlsConfig  *tls.Config
+	option *WtpOption
+	pool   *wtp.PoolClient
 }
 
 type WtpOption struct {
@@ -40,51 +39,26 @@ type WtpOption struct {
 	CongestionController string `proxy:"congestion-controller,omitempty"`
 	CWND                 int    `proxy:"cwnd,omitempty"`
 	BBRProfile           string `proxy:"bbr-profile,omitempty"`
+	MaxOpenStreams       int    `proxy:"max-open-streams,omitempty"`
 }
 
 func (w *Wtp) DialContext(ctx context.Context, metadata *C.Metadata) (C.Conn, error) {
-	session, err := wtp.Dial(ctx, w.addr, wtp.DialOptions{
-		Dialer:               w.dialer,
-		DialOptions:          w.DialOptions(),
-		TLSConfig:            w.tlsConfig,
-		QUICConfig:           w.quicConfig,
-		CongestionController: w.option.CongestionController,
-		CWND:                 w.option.CWND,
-		BBRProfile:           w.option.BBRProfile,
-	}, w.option.Path, "tcp", metadata.RemoteAddress())
+	conn, err := w.pool.DialContext(ctx, metadata)
 	if err != nil {
 		return nil, err
 	}
-
-	stream, err := session.OpenBidiStream(ctx)
-	if err != nil {
-		_ = session.Close()
-		return nil, err
-	}
-
-	return NewConn(wtp.NewConn(session, stream), w), nil
+	return NewConn(conn, w), nil
 }
 
 func (w *Wtp) ListenPacketContext(ctx context.Context, metadata *C.Metadata) (C.PacketConn, error) {
 	if err := w.ResolveUDP(ctx, metadata); err != nil {
 		return nil, err
 	}
-	target := net.JoinHostPort(metadata.DstIP.String(), strconv.Itoa(int(metadata.DstPort)))
-
-	session, err := wtp.Dial(ctx, w.addr, wtp.DialOptions{
-		Dialer:               w.dialer,
-		DialOptions:          w.DialOptions(),
-		TLSConfig:            w.tlsConfig,
-		QUICConfig:           w.quicConfig,
-		CongestionController: w.option.CongestionController,
-		CWND:                 w.option.CWND,
-		BBRProfile:           w.option.BBRProfile,
-	}, w.option.Path, "udp", target)
+	pc, err := w.pool.ListenPacket(ctx, metadata)
 	if err != nil {
 		return nil, err
 	}
-
-	return newPacketConn(wtp.NewPacketConn(session), w), nil
+	return newPacketConn(pc, w), nil
 }
 
 func (w *Wtp) SupportUOT() bool { return true }
@@ -95,7 +69,7 @@ func (w *Wtp) ProxyInfo() C.ProxyInfo {
 	return info
 }
 
-func (w *Wtp) Close() error { return nil }
+func (w *Wtp) Close() error { return w.pool.Close() }
 
 func NewWtp(option WtpOption) (*Wtp, error) {
 	addr := net.JoinHostPort(option.Server, strconv.Itoa(option.Port))
@@ -132,6 +106,10 @@ func NewWtp(option WtpOption) (*Wtp, error) {
 		option.Port = 443
 	}
 
+	if option.MaxOpenStreams == 0 {
+		option.MaxOpenStreams = 100
+	}
+
 	keepAlivePeriod := time.Duration(option.KeepAlive) * time.Second
 	if option.KeepAlive == 0 {
 		keepAlivePeriod = 60 * time.Second
@@ -142,10 +120,10 @@ func NewWtp(option WtpOption) (*Wtp, error) {
 		KeepAlivePeriod:                keepAlivePeriod,
 		EnableDatagrams:                true,
 		InitialPacketSize:              1200,
-		InitialStreamReceiveWindow:     4 * 1024 * 1024,  // 16MB 初始流窗口
-		InitialConnectionReceiveWindow: 8 * 1024 * 1024,  // 32MB 初始连接窗口
-		MaxStreamReceiveWindow:         16 * 1024 * 1024, // 16MB 单流窗口
-		MaxConnectionReceiveWindow:     32 * 1024 * 1024, // 32MB 连接窗口
+		InitialStreamReceiveWindow:     4 * 1024 * 1024,  // 4 MiB 初始流窗口
+		InitialConnectionReceiveWindow: 8 * 1024 * 1024,  // 8 MiB 初始连接窗口
+		MaxStreamReceiveWindow:         16 * 1024 * 1024, // 16 MiB 单流窗口
+		MaxConnectionReceiveWindow:     32 * 1024 * 1024, // 32 MiB 连接窗口
 		MaxIncomingStreams:             1024,
 		HandshakeIdleTimeout:           10 * time.Second,
 		DisablePathMTUDiscovery:        true,
@@ -162,14 +140,31 @@ func NewWtp(option WtpOption) (*Wtp, error) {
 			RoutingMark:  option.RoutingMark,
 			Prefer:       option.IPVersion,
 		}),
-		option:     &option,
-		quicConfig: quicConfig,
-		tlsConfig:  tlsConfig,
+		option: &option,
 	}
+
 	outbound.dialer = option.NewDialer(outbound.DialOptions())
 	if outbound.dialer == nil {
 		return nil, fmt.Errorf("wtp: failed to create dialer")
 	}
+
+	dialFn := func(ctx context.Context, endpoint, protocol string) (*wtp.Session, error) {
+		return wtp.Dial(ctx, addr, wtp.DialOptions{
+			Dialer:               outbound.dialer,
+			DialOptions:          outbound.DialOptions(),
+			TLSConfig:            tlsConfig,
+			QUICConfig:           quicConfig,
+			CongestionController: option.CongestionController,
+			CWND:                 option.CWND,
+			BBRProfile:           option.BBRProfile,
+		}, option.Path, protocol, endpoint)
+	}
+
+	clientOption := &wtp.ClientOption{
+		MaxOpenStreams: int64(option.MaxOpenStreams),
+	}
+
+	outbound.pool = wtp.NewPoolClient(clientOption, dialFn)
 
 	return outbound, nil
 }
