@@ -1552,6 +1552,18 @@ proxies: # socks5
     # udp-over-stream: false
     # udp-over-stream-version: 1
 
+  # wtp (WebTransport draft-02)
+  - name: WTP-SW
+    type: wtp
+    server: 104.244.79.19
+    sni: op.647252.xyz
+    port: 443
+    path: /647252
+    congestion-controller: bbr
+    client-fingerprint: chrome # 仅做配置兼容，不改变 QUIC ClientHello
+    bbr-profile: aggressive
+    udp: true
+
   # shadowquic
   - name: shadowquic
     server: www.example.com

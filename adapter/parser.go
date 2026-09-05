@@ -125,6 +125,13 @@ func ParseProxy(mapping map[string]any, options ...ProxyOption) (C.Proxy, error)
 			break
 		}
 		proxy, err = outbound.NewGostRelay(*relayOption)
+	case "wtp":
+		wtpOption := &outbound.WtpOption{BasicOption: basicOption}
+		err = decoder.Decode(mapping, wtpOption)
+		if err != nil {
+			break
+		}
+		proxy, err = outbound.NewWtp(*wtpOption)
 	case "direct":
 		directOption := &outbound.DirectOption{BasicOption: basicOption}
 		err = decoder.Decode(mapping, directOption)
